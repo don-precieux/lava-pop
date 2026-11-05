@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="fr"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Lava Pop</title>
+<style>
+:root{--bg:#1a0f2e;--panel:#2a1748;--ink:#fff6e8;--hot:#ff7a2f;--gold:#ffd75e;color-scheme:dark;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{height:100%;margin:0}
+body{background:radial-gradient(120% 80% at 50% 0%,#3b1f6b,var(--bg));color:var(--ink);font-family:"Trebuchet MS","Segoe UI",system-ui,sans-serif;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;overflow:hidden;user-select:none;touch-action:manipulation}
+#hud{display:flex;gap:10px;width:min(100%,440px);padding:0 8px}
+.chip{flex:1;background:var(--panel);border-radius:14px;padding:6px 10px;text-align:center;box-shadow:inset 0 -3px rgba(0,0,0,.25)}
+.chip small{display:block;font-size:11px;opacity:.7}
+.chip b{font-size:22px;color:var(--gold)}
+#wrap{position:relative;border-radius:18px;overflow:hidden;box-shadow:0 10px 40px rgba(0,0,0,.5),0 0 0 3px #4a2a80}
+canvas{display:block;background:#241540}
+.ov{position:absolute;inset:0;background:rgba(20,8,40,.88);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;text-align:center;padding:20px}
+.ov.hide{display:none}
+h1{margin:0;font-size:44px;letter-spacing:1px;color:var(--hot);text-shadow:0 4px 0 #7a2200}
+p{margin:0;max-width:280px;line-height:1.4}
+button{font:inherit;font-weight:700;font-size:20px;border:0;border-radius:16px;padding:12px 30px;background:var(--hot);color:#2a0d00;box-shadow:0 5px 0 #a33a00;cursor:pointer}
+button:active{transform:translateY(4px);box-shadow:0 1px 0 #a33a00}
+button.alt{background:#6bb8ff;box-shadow:0 5px 0 #1e5fb0;font-size:16px}
+button:focus-visible{outline:3px solid #fff;outline-offset:3px}
+#big{font-size:54px;font-weight:800;color:var(--gold)}
+#pws{display:flex;gap:10px}
+#pws button{font-size:15px;padding:9px 16px;border-radius:14px}
+</style></head><body>
+<div id="hud">
+ <div class="chip"><small>Score</small><b id="sc">0</b></div>
+ <div class="chip"><small>Niveau</small><b id="lv">1</b></div>
+ <div class="chip"><small>Record</small><b id="bs">0</b></div>
+</div>
+<div id="wrap">
+ <canvas id="c"></canvas>
+ <div class="ov" id="start">
+  <h1>LAVA POP</h1>
+  <p>Touchez les groupes de gemmes identiques pour les faire exploser. Les gros groupes font reculer la lave !</p>
+  <p>Groupe de 6 ou plus : une bombe 💣. Les combos débloquent ❄️ Gel (stoppe la lave) et 🔨 Marteau. Défi du jour : la même grille pour tout le monde !</p>
+  <button id="play">Jouer</button>
+  <button class="alt" id="daily">Défi du jour</button>
+ </div>
+ <div class="ov hide" id="end">
+  <p>La lave a tout englouti</p>
+  <div id="big">0</div>
+  <p id="rec"></p>
+  <button id="again">Rejouer</button>
+  <button class="alt" id="share">Défier un ami</button>
+ </div>
+</div>
+<div id="pws"><button class="alt" id="ice">❄️ Gel ×1</button><button class="alt" id="ham">🔨 Marteau ×1</button></div>
+<script>
+const W=8,H=10,COL=[['#ff8fa8','#d81e4a'],['#8fcaff','#1e6fe0'],['#8fffc4','#14b866'],['#ffe27a','#e09a00'],['#d9a8ff','#8a3fe0']];
+const cv=document.getElementById('c'),x=cv.getContext('2d');
+const $=id=>document.getElementById(id);
+let cs,g,lava,score,best=0,combo,comboT,parts=[],texts=[],shake=0,running=false,last=0,level,AC;
+try{best=+localStorage.getItem('lp_best')||0}catch(e){}
+$('bs').textContent=best;
+function size(){
+ const w=Math.min(innerWidth-16,440);
+ cs=Math.max(24,Math.min(Math.floor(w/W),Math.floor((innerHeight-130)/H)));
+ const d=window.devicePixelRatio||1;
+ cv.style.width=cs*W+'px';cv.style.height=cs*H+'px';
+ cv.width=cs*W*d;cv.height=cs*H*d;
+ x.setTransform(d,0,0,d,0,0);
+ $('hud').style.width=cs*W+'px';
+}
+addEventListener('resize',size);size();
+let seed=0,daily=false,pu={ice:1,ham:1},tool=null,freeze=0;
+function rng(){if(!daily)return Math.random();seed=(seed*1664525+1013904223)>>>0;return seed/4294967296;}
+const rnd=()=>rng()*5|0;
+function reset(){
+ g=[];
+ for(let c=0;c<W;c++){g[c]=[];for(let r=0;r<H;r++)g[c][r]={t:rnd(),y:r-H-1-Math.random()*3,vy:0};}
+ lava=1.2;score=0;pu={ice:1,ham:1};tool=null;freeze=0;combo=0;comboT=0;level=1;parts=[];texts=[];shake=0;
+ hud();
+}
+function hud(){$('sc').textContent=score;$('lv').textContent=level;$('bs').textContent=Math.max(best,score);}
+function snd(f,d=.12,type='triangle'){
+ try{
+  AC=AC||new (window.AudioContext||window.webkitAudioContext)();
+  const o=AC.createOscillator(),v=AC.createGain();
+  o.type=type;o.frequency.value=f;v.gain.value=.12;
+  v.gain.exponentialRampToValueAtTime(.001,AC.currentTime+d);
+  o.connect(v);v.connect(AC.destination);o.start();o.stop(AC.currentTime+d);
+ }catch(e){}
+}
+function buzz(n){try{navigator.vibrate&&navigator.vibrate(n)}catch(e){}}
+const covered=r=>r+.5>H-lava;
+function flood(c,r){
+ const t=g[c][r].t,seen=new Set([c*H+r]),st=[[c,r]],out=[];
+ while(st.length){
+  const [a,b]=st.pop();out.push([a,b]);
+  for(const [dx,dy] of [[1,0],[-1,0],[0,1],[0,-1]]){
+   const n=a+dx,m=b+dy;
+   if(n<0||m<0||n>=W||m>=H||seen.has(n*H+m)||covered(m))continue;
+   const q=g[n][m];
+   if(q&&q.t===t){seen.add(n*H+m);st.push([n,m]);}
+  }
+ }
+ return out;
+}
+function burst(c,r,t){
+ const col=t===5?['#ffb347','#ff5a1f']:COL[t];
+ for(let i=0;i<9;i++){
+  const a=Math.random()*6.28,s=60+Math.random()*160;
+  parts.push({x:(c+.5)*cs,y:(r+.5)*cs,vx:Math.cos(a)*s,vy:Math.sin(a)*s-60,l:.7,c:col[i%2],s:3+Math.random()*4});
+ }
+}
+function say(txt,c,r,col='#fff'){texts.push({x:(c+.5)*cs,y:(r+.5)*cs,t:txt,l:1,col});}
+function gravity(){
+ for(let c=0;c<W;c++){
+  const col=g[c].filter(Boolean),n=H-col.length,arr=[];
+  for(let i=0;i<n;i++)arr.push({t:rnd(),y:i-n-1,vy:0});
+  g[c]=arr.concat(col);
+ }
+}
+function tap(c,r){
+ if(!g[c]||!g[c][r]||covered(r)||!running)return;
+ const cell=g[c][r];let list;
+ if(tool==='ham'){tool=null;pu.ham--;burst(c,r,cell.t);g[c][r]=null;lava=Math.max(.8,lava-.2);shake=8;snd(520,.12);buzz(30);gravity();pw();return;}
+ if(cell.t===5){
+  list=[];
+  for(let a=c-1;a<=c+1;a++)for(let b=r-1;b<=r+1;b++)if(g[a]&&g[a][b])list.push([a,b]);
+  shake=14;snd(90,.35,'sawtooth');buzz(60);
+ }else{
+  list=flood(c,r);
+  if(list.length<2){cell.vy=-4;snd(150,.08,'square');combo=0;return;}
+ }
+ const n=list.length;
+ comboT=2;combo++;
+ for(const [a,b] of list){burst(a,b,g[a][b].t);g[a][b]=null;}
+ const gain=n*n*5*Math.min(combo,8);
+ score+=gain;
+ lava=Math.max(.8,lava-n*.07);
+ snd(300+combo*55+n*18,.15);buzz(15);
+ shake=Math.max(shake,Math.min(n,10));
+ say('+'+gain,c,r,'#ffe27a');
+ if(n>=10)say('INCROYABLE !',3.5,4,'#ff7a2f');
+ else if(n>=6)say('GÉNIAL !',3.5,4,'#6bffb0');
+ else if(combo>=3)say('COMBO x'+combo,3.5,4,'#8fcaff');
+ if(n>=6&&cell.t!==5)g[c][r]={t:5,y:r,vy:0};
+ gravity();
+ const nl=1+Math.floor(score/600);
+ if(nl>level){level=nl;lava=Math.max(.8,lava-1.2);say('NIVEAU '+level+' !',3.5,3,'#ffd75e');snd(660,.3);pu.ice++;}
+ if(combo===4)pu.ice++;
+ if(n>=8)pu.ham++;
+ hud();pw();
+}
+cv.addEventListener('pointerdown',e=>{
+ const b=cv.getBoundingClientRect();
+ tap(Math.floor((e.clientX-b.left)/cs),Math.floor((e.clientY-b.top)/cs));
+});
+function poly(cx,cy,r,n,rot){
+ x.beginPath();
+ for(let i=0;i<n;i++){const a=rot+i*6.283/n;x[i?'lineTo':'moveTo'](cx+Math.cos(a)*r,cy+Math.sin(a)*r);}
+ x.closePath();
+}
+function gem(t,cx,cy,r){
+ if(t===5){
+  x.fillStyle='#2b1a40';x.beginPath();x.arc(cx,cy,r*.85,0,6.283);x.fill();
+  x.strokeStyle='#ff7a2f';x.lineWidth=3;x.stroke();
+  x.font=(r*1.2)+'px serif';x.textAlign='center';x.textBaseline='middle';x.fillStyle='#fff';x.fillText('💣',cx,cy+2);
+  return;
+ }
+ const gr=x.createLinearGradient(cx,cy-r,cx,cy+r);
+ gr.addColorStop(0,COL[t][0]);gr.addColorStop(1,COL[t][1]);
+ x.fillStyle=gr;
+ if(t===0)poly(cx,cy,r*1.05,4,0);
+ else if(t===1){x.beginPath();x.roundRect(cx-r*.85,cy-r*.85,r*1.7,r*1.7,r*.3);}
+ else if(t===2){x.beginPath();x.arc(cx,cy,r*.9,0,6.283);}
+ else if(t===3)poly(cx,cy,r,6,0);
+ else poly(cx,cy+r*.1,r*1.15,3,-Math.PI/2);
+ x.fill();x.strokeStyle='rgba(0,0,0,.35)';x.lineWidth=2;x.stroke();
+ x.fillStyle='rgba(255,255,255,.45)';x.beginPath();x.ellipse(cx-r*.3,cy-r*.35,r*.28,r*.14,-.6,0,6.283);x.fill();
+}
+function over(){
+ running=false;snd(80,.6,'sawtooth');buzz([80,40,160]);
+ const nb=score>best;
+ if(nb){best=score;try{localStorage.setItem('lp_best',best)}catch(e){}}
+ $('big').textContent=score;
+ $('rec').textContent=nb?'Nouveau record !':'Record : '+best;
+ $('end').classList.remove('hide');
+}
+function frame(ts){
+ const dt=Math.min(.05,(ts-last)/1000||0);last=ts;
+ if(running){
+  if(freeze>0)freeze-=dt;else lava+=dt*(.03+level*.006);
+  comboT-=dt;if(comboT<=0)combo=0;
+  if(lava>=H-.3)over();
+ }
+ for(let c=0;c<W;c++)for(let r=0;r<H;r++){
+  const k=g[c][r];if(!k)continue;
+  k.vy+=55*dt;k.y+=k.vy*dt;
+  if(k.y>=r){k.y=r;k.vy=k.vy>6?-k.vy*.22:0;}
+ }
+ for(const p of parts){p.vy+=500*dt;p.x+=p.vx*dt;p.y+=p.vy*dt;p.l-=dt;}
+ parts=parts.filter(p=>p.l>0);
+ for(const t of texts){t.y-=40*dt;t.l-=dt;}
+ texts=texts.filter(t=>t.l>0);
+ shake=Math.max(0,shake-40*dt);
+ const bw=cs*W,bh=cs*H;
+ x.save();
+ x.clearRect(0,0,bw,bh);
+ x.translate((Math.random()-.5)*shake,(Math.random()-.5)*shake);
+ for(let r=0;r<H;r++)for(let c=0;c<W;c++){
+  x.fillStyle=(r+c)%2?'#2b1950':'#271548';x.fillRect(c*cs,r*cs,cs,cs);
+ }
+ for(let c=0;c<W;c++)for(let r=0;r<H;r++){
+  const k=g[c][r];if(!k)continue;
+  gem(k.t,(c+.5)*cs,(k.y+.5)*cs,cs*.4);
+ }
+ const ly=(H-lava)*cs,tm=ts/400;
+ const lg=x.createLinearGradient(0,ly,0,bh);
+ lg.addColorStop(0,'#ffb347');lg.addColorStop(.25,'#ff5a1f');lg.addColorStop(1,'#a01800');
+ x.fillStyle=lg;x.beginPath();x.moveTo(0,bh);
+ for(let i=0;i<=W*4;i++)x.lineTo(i*cs/4,ly+Math.sin(tm+i*.9)*4);
+ x.lineTo(bw,bh);x.closePath();x.globalAlpha=.93;x.fill();x.globalAlpha=1;
+ if(freeze>0){x.fillStyle='rgba(120,200,255,.18)';x.fillRect(0,0,bw,bh);}
+ if(lava>6){x.fillStyle='rgba(255,60,20,'+(.12+.1*Math.sin(ts/120))+')';x.fillRect(0,0,bw,bh);}
+ for(const p of parts){x.globalAlpha=Math.max(0,p.l/.7);x.fillStyle=p.c;x.fillRect(p.x,p.y,p.s,p.s);}
+ x.globalAlpha=1;
+ x.textAlign='center';x.textBaseline='middle';
+ for(const t of texts){
+  x.globalAlpha=Math.min(1,t.l*1.5);x.font='800 '+(cs*.5)+'px "Trebuchet MS",sans-serif';
+  x.lineWidth=5;x.strokeStyle='#2a0d00';x.strokeText(t.t,t.x,t.y);x.fillStyle=t.col;x.fillText(t.t,t.x,t.y);
+ }
+ x.globalAlpha=1;x.restore();
+ requestAnimationFrame(frame);
+}
+function pw(){$('ice').textContent='❄️ Gel ×'+pu.ice;$('ham').textContent='🔨 Marteau ×'+pu.ham;$('ham').style.outline=tool==='ham'?'3px solid #fff':'';}
+$('ice').onclick=()=>{if(!running||pu.ice<1)return;pu.ice--;freeze=6;snd(900,.4,'sine');buzz(30);pw();};
+$('ham').onclick=()=>{if(!running||pu.ham<1)return;tool=tool==='ham'?null:'ham';pw();};
+function start(d){
+ daily=d===true;
+ if(daily){const t=new Date();seed=t.getFullYear()*10000+(t.getMonth()+1)*100+t.getDate();}
+ reset();running=true;pw();
+ $('start').classList.add('hide');$('end').classList.add('hide');
+ snd(440,.1);
+}
+$('play').onclick=()=>start();$('again').onclick=()=>start(daily);$('daily').onclick=()=>start(true);
+$('share').onclick=async()=>{
+ const text='J’ai fait '+score+' points à Lava Pop 🌋'+(daily?' (défi du jour)':'')+' Tu peux faire mieux ?';
+ try{
+  if(navigator.share)await navigator.share({title:'Lava Pop',text,url:location.href});
+  else{await navigator.clipboard.writeText(text+' '+location.href);$('share').textContent='Lien copié !';}
+ }catch(e){}
+};
+reset();running=false;
+requestAnimationFrame(frame);
+</script>
+</body></html>
